@@ -1,0 +1,6 @@
+numpy
+librosa
+matplotlib
+scipy
+python_speech_features
+sounddevice 
