@@ -290,33 +290,60 @@ def main():
           f"(koristeći {NUM_CEP} koef., {QUANTIZATION_BITS}-bitnu kvantizaciju)")
     print(f"Omjer kompresije: {compression_ratio:.2f}")
 
-    plot_results(signal, sr, mfccs_manual,
-                 title_suffix=f"Ručni ({NUM_CEP} Koef., {QUANTIZATION_BITS}-bit Kvant.)",
-                 frame_length_ms=FRAME_LENGTH_MS, frame_step_ms=FRAME_STEP_MS)
+    # --- 1. FIGURA: valni oblik i spektrogram originalnog audiozapisa ---
+    plt.figure(figsize=(12, 7))
+    plt.subplot(2, 1, 1)
+    librosa.display.waveshow(signal, sr=sr)
+    plt.title(f"Originalni valni oblik ({os.path.basename(AUDIO_FILE)})")
+    frame_length_samples = int(round(FRAME_LENGTH_MS / 1000 * sr))
+    frame_step_samples = int(round(FRAME_STEP_MS / 1000 * sr))
+    n_fft_spec = 1
+    while n_fft_spec < frame_length_samples: n_fft_spec *= 2
+    S = librosa.stft(signal, n_fft=n_fft_spec, hop_length=frame_step_samples, win_length=frame_length_samples)
+    S_db = librosa.amplitude_to_db(np.abs(S), ref=np.max)
+    plt.subplot(2, 1, 2)
+    librosa.display.specshow(S_db, sr=sr, hop_length=frame_step_samples, x_axis='time', y_axis='log')
+    plt.title("Spektrogram (original)")
+    plt.colorbar(format='%+2.0f dB')
+    plt.tight_layout()
 
-    # --- MODIFICIRANO: Samo spremanje rekonstruiranog zvuka ---
+    # --- RECONSTRUCTED AUDIO: MFCCs and plot (manual) ---
     reconstructed_audio = reconstruct_audio_from_mfccs(
         mfccs_manual, sr=sr, n_fft=n_fft,
         hop_length_samples=frame_step_samples, win_length_samples=frame_length_samples,
         num_mel_filters=NUM_MEL_FILTERS, preemph_alpha=PREEMPH_ALPHA,
-        num_cep_original=NUM_CEP, griffin_lim_iters=60 # Povećan broj iteracija za potencijalno bolju kvalitetu
+        num_cep_original=NUM_CEP, griffin_lim_iters=60
     )
-    # Normalizacija rekonstruiranog signala da bude u [-1, 1] rasponu za spremanje
     if np.max(np.abs(reconstructed_audio)) > 0:
          reconstructed_audio = reconstructed_audio / np.max(np.abs(reconstructed_audio))
 
-    reconstructed_filename = "reconstructed_audio_from_mfcc.wav" # Malo deskriptivnije ime
+    reconstructed_filename = "reconstructed_audio_from_mfcc.wav"
     try:
-        # Spremanje kao float32 WAV. Scipy će automatski skalirati ako je int.
-        # Za float, očekuje se da je u rasponu [-1, 1]
         scipy_wav.write(reconstructed_filename, sr, reconstructed_audio.astype(np.float32))
         print(f"\nRekonstruirani audio spremljen kao: {reconstructed_filename}")
         print("Možete ga sada ručno reproducirati iz te datoteke.")
-
     except Exception as e:
         print(f"Greška prilikom spremanja rekonstruiranog zvuka: {e}")
 
-    # Opcionalno: Usporedba s python_speech_features bibliotekom (ako je dostupna)
+    mfccs_reconstructed = compute_mfccs_manual(reconstructed_audio, sr,
+                                               frame_length_ms=FRAME_LENGTH_MS, frame_step_ms=FRAME_STEP_MS,
+                                               num_cep=NUM_CEP, num_mel_filters=NUM_MEL_FILTERS,
+                                               preemph_alpha=PREEMPH_ALPHA, n_fft_pow2=N_FFT_MUST_BE_POWER_OF_2)
+
+    # --- 2. FIGURA: valni oblik i spektrogram rekonstruiranog audiozapisa (manual MFCC) ---
+    plt.figure(figsize=(12, 7))
+    plt.subplot(2, 1, 1)
+    librosa.display.waveshow(reconstructed_audio, sr=sr)
+    plt.title("Valni oblik (rekonstruirani audio - ručni MFCC)")
+    S_rec = librosa.stft(reconstructed_audio, n_fft=n_fft_spec, hop_length=frame_step_samples, win_length=frame_length_samples)
+    S_db_rec = librosa.amplitude_to_db(np.abs(S_rec), ref=np.max)
+    plt.subplot(2, 1, 2)
+    librosa.display.specshow(S_db_rec, sr=sr, hop_length=frame_step_samples, x_axis='time', y_axis='log')
+    plt.title("Spektrogram (rekonstruirani audio - ručni MFCC)")
+    plt.colorbar(format='%+2.0f dB')
+    plt.tight_layout()
+
+    # --- RECONSTRUCTED AUDIO: MFCCs and plot (python_speech_features MFCC) ---
     if PYTHON_SPEECH_FEATURES_AVAILABLE:
         print("\n--- Izračun MFCC-a koristeći biblioteku python_speech_features za usporedbu ---")
         psf_frame_len_samples = int(round(FRAME_LENGTH_MS / 1000 * sr))
@@ -328,23 +355,70 @@ def main():
                              lowfreq=0, highfreq=sr / 2, preemph=PREEMPH_ALPHA,
                              ceplifter=0, appendEnergy=False, winfunc=np.hamming)
         print(f"MFCC-i iz python_speech_features oblika: {mfccs_psf.shape}")
-        plot_results(signal, sr, mfccs_psf,
-                     title_suffix=f"python_speech_features ({NUM_CEP} Koef.)",
-                     frame_length_ms=FRAME_LENGTH_MS, frame_step_ms=FRAME_STEP_MS)
+
+        # Rekonstrukcija signala iz python_speech_features MFCC
+        reconstructed_audio_psf = reconstruct_audio_from_mfccs(
+            mfccs_psf, sr=sr, n_fft=n_fft,
+            hop_length_samples=frame_step_samples, win_length_samples=frame_length_samples,
+            num_mel_filters=NUM_MEL_FILTERS, preemph_alpha=PREEMPH_ALPHA,
+            num_cep_original=NUM_CEP, griffin_lim_iters=60
+        )
+        if np.max(np.abs(reconstructed_audio_psf)) > 0:
+            reconstructed_audio_psf = reconstructed_audio_psf / np.max(np.abs(reconstructed_audio_psf))
+        reconstructed_filename_psf = "reconstructed_audio_from_psf_mfcc.wav"
+        try:
+            scipy_wav.write(reconstructed_filename_psf, sr, reconstructed_audio_psf.astype(np.float32))
+            print(f"Rekonstruirani audio (python_speech_features MFCC) spremljen kao: {reconstructed_filename_psf}")
+        except Exception as e:
+            print(f"Greška prilikom spremanja rekonstruiranog zvuka (psf): {e}")
+
+        # --- 3. FIGURA: valni oblik i spektrogram rekonstruiranog audiozapisa (psf MFCC) ---
+        plt.figure(figsize=(12, 7))
+        plt.subplot(2, 1, 1)
+        librosa.display.waveshow(reconstructed_audio_psf, sr=sr)
+        plt.title("Valni oblik (rekonstruirani audio - python_speech_features MFCC)")
+        S_rec_psf = librosa.stft(reconstructed_audio_psf, n_fft=n_fft_spec, hop_length=frame_step_samples, win_length=frame_length_samples)
+        S_db_rec_psf = librosa.amplitude_to_db(np.abs(S_rec_psf), ref=np.max)
+        plt.subplot(2, 1, 2)
+        librosa.display.specshow(S_db_rec_psf, sr=sr, hop_length=frame_step_samples, x_axis='time', y_axis='log')
+        plt.title("Spektrogram (rekonstruirani audio - python_speech_features MFCC)")
+        plt.colorbar(format='%+2.0f dB')
+        plt.tight_layout()
+
+        # --- 4. FIGURA: Heatmap MFCC (ručni) i python_speech_features ---
+        plt.figure(figsize=(12, 7))
+        plt.subplot(2, 1, 1)
+        librosa.display.specshow(mfccs_manual.T, sr=sr, hop_length=frame_step_samples, x_axis='time')
+        plt.title(f"MFCC Heatmap (ručni, {NUM_CEP} Koef.)")
+        plt.ylabel("MFCC Koeficijenti")
+        plt.colorbar()
+        plt.subplot(2, 1, 2)
+        librosa.display.specshow(mfccs_psf.T, sr=sr, hop_length=frame_step_samples, x_axis='time')
+        plt.title(f"MFCC Heatmap (python_speech_features, {NUM_CEP} Koef.)")
+        plt.ylabel("MFCC Koeficijenti")
+        plt.colorbar()
+        plt.tight_layout()
         if mfccs_manual.shape == mfccs_psf.shape:
             diff = np.mean(np.abs(mfccs_manual - mfccs_psf))
             print(f"\nSrednja apsolutna razlika između ručnih MFCC-a i MFCC-a iz python_speech_features: {diff:.4f}")
         else:
             print("\nOblici ručnih MFCC-a i MFCC-a iz python_speech_features se ne podudaraju, preskače se numerička usporedba.")
+    else:
+        # Ako nema python_speech_features, prikaži samo ručni MFCC
+        plt.figure(figsize=(8, 4))
+        librosa.display.specshow(mfccs_manual.T, sr=sr, hop_length=frame_step_samples, x_axis='time')
+        plt.title(f"MFCC Heatmap (ručni, {NUM_CEP} Koef.)")
+        plt.ylabel("MFCC Koeficijenti")
+        plt.colorbar()
+        plt.tight_layout()
 
+    # --- 5. FIGURA: Omjer kompresije vs broj MFCC koeficijenata ---
     plot_compression_vs_num_cep(signal, sr, original_filesize_bytes,
                                 max_num_cep=20, quantization_bits=QUANTIZATION_BITS,
                                 frame_length_ms=FRAME_LENGTH_MS, frame_step_ms=FRAME_STEP_MS,
                                 num_mel_filters=NUM_MEL_FILTERS, preemph_alpha=PREEMPH_ALPHA)
-    
-    # Dodano da se svi grafovi prikažu na kraju ako su neblokirajući
-    plt.show() 
+    plt.show()
     print("\nProces završen.")
-
+    
 if __name__ == "__main__":
     main()
