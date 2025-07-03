@@ -3,4 +3,7 @@ librosa
 matplotlib
 scipy
 python_speech_features
-sounddevice 
+sounddevice
+pandas
+seaborn
+scikit-learn
